@@ -3,9 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="shortcut icon" href="favicon.ico" />
-    <title>Buddies Animations Viewer</title>
-    <script src="https://unpkg.com/@rive-app/canvas@2.7.0"></script>
+    <title>Buddy Characters Viewer</title>
+    <script src="https://unpkg.com/@rive-app/canvas@2.38.2"></script>
     <style>
       :root {
         --bg: #0f1115;
@@ -17,6 +16,8 @@
         --accent-hover: #4a7bef;
         --stop: #ff5b6b;
         --stop-hover: #ef4a5b;
+        --trigger: #2a2e38;
+        --trigger-hover: #3a3f4c;
       }
 
       * {
@@ -81,15 +82,8 @@
         overflow: hidden;
         margin-bottom: 14px;
         position: relative;
-        cursor: pointer;
-        transition: box-shadow 0.15s ease;
-        /* Mencegah browser men-throttle/decode canvas yang sedang
-           tidak terlihat sepenuhnya saat scroll cepat */
+        /* Tidak lagi interaktif lewat hover, jadi tidak perlu cursor pointer */
         contain: layout paint;
-      }
-
-      .canvas-wrap:hover {
-        box-shadow: 0 0 0 2px var(--accent);
       }
 
       canvas {
@@ -117,6 +111,14 @@
         display: flex;
         gap: 10px;
         width: 100%;
+        margin-bottom: 10px;
+      }
+
+      .trigger-controls {
+        display: flex;
+        gap: 8px;
+        width: 100%;
+        flex-wrap: wrap;
       }
 
       button {
@@ -152,6 +154,16 @@
         background: var(--stop-hover);
       }
 
+      .btn-trigger {
+        background: var(--trigger);
+        font-size: 13px;
+        padding: 8px 10px;
+        text-transform: capitalize;
+      }
+      .btn-trigger:hover:not(:disabled) {
+        background: var(--trigger-hover);
+      }
+
       .load-error {
         color: var(--stop);
         font-size: 12px;
@@ -161,18 +173,19 @@
     </style>
   </head>
   <body>
-    <h1>Buddies Animations</h1>
+    <h1>Animated Buddy Characters of HomeworkBuddy</h1>
     <p class="subtitle">
-      Hover your mouse over the canvas to play, drag it out to stop -- or use
-      the buttons (e.g. on smartphone)
+      Press the Play button to start the intro animation, and click on the
+      trigger buttons to switch between states (when the "idle" state is ready).
     </p>
 
     <div class="grid" id="grid"></div>
 
     <script>
-      const animations = [
-        { key: "owl-intro", label: "Owl (intro)", file: "owl-intro.riv" },
-      ];
+      const animations = [{ key: "owl", label: "Owl", file: "owl.riv" }];
+
+      // Nama-nama trigger pada ViewModel1 di file owl.riv
+      const triggerNames = ["idle", "bored", "success"];
 
       const grid = document.getElementById("grid");
       const instances = {};
@@ -191,6 +204,14 @@
         <button class="btn-play" id="play-${anim.key}">▶ Play</button>
         <button class="btn-stop" id="stop-${anim.key}" disabled>■ Stop</button>
       </div>
+      <div class="trigger-controls" id="triggers-${anim.key}">
+        ${triggerNames
+          .map(
+            (t) =>
+              `<button class="btn-trigger" id="trigger-${anim.key}-${t}" disabled>${t}</button>`,
+          )
+          .join("")}
+      </div>
     `;
         grid.appendChild(card);
 
@@ -198,135 +219,179 @@
         const playBtn = card.querySelector(`#play-${anim.key}`);
         const stopBtn = card.querySelector(`#stop-${anim.key}`);
         const statusEl = card.querySelector(`#status-${anim.key}`);
-        const canvasWrap = card.querySelector(".canvas-wrap");
+        const triggerButtons = triggerNames.map((t) =>
+          card.querySelector(`#trigger-${anim.key}-${t}`),
+        );
 
-        // Akan diisi saat onLoad: nama state machine ATAU nama animasi yang valid.
-        // Ini WAJIB di-pass ulang setiap kali play(), karena setelah stop() rive-js
-        // melepas binding ke animasi sebelumnya -- play() tanpa nama tidak akan
-        // tahu animasi apa yang harus dijalankan lagi.
         let playbackName = null;
         let isStateMachine = false;
         let isLoaded = false;
-        // Guard supaya reset()/play() yang dipanggil cepat berurutan (umum
-        // terjadi saat scroll, karena mouseenter/mouseleave bisa ter-trigger
-        // berkali-kali dalam waktu singkat) tidak saling tabrakan dan membuat
-        // WASM artboard berada di state tidak konsisten (-> tampak blank/hitam).
-        let isTransitioning = false;
+        let riveInstance = null;
 
-        // Load the external .riv file
-        const riveInstance = new rive.Rive({
-          src: anim.file,
-          canvas: canvas,
-          autoplay: false,
-          autoBind: true,
-          // Berbagi satu context WebGL untuk semua instance di halaman ini.
-          // Tanpa ini, 15 canvas berjalan bersamaan rawan kena limit context
-          // WebGL milik browser (Chrome ~16 per tab); saat limit tercapai,
-          // browser akan mem-paksa-hapus context yang lain -> jadi hitam.
-          useOffscreenRenderer: true,
-          onLoad: () => {
-            isLoaded = true;
+        function setTriggerButtonsEnabled(enabled) {
+          triggerButtons.forEach((btn) => {
+            if (btn) btn.disabled = !enabled;
+          });
+        }
 
-            // Prioritaskan state machine kalau ada, fallback ke animasi biasa
-            const stateMachines = riveInstance.stateMachineNames;
-            const linearAnimations = riveInstance.animationNames;
-
-            if (stateMachines && stateMachines.length > 0) {
-              playbackName = stateMachines[0];
-              isStateMachine = true;
-            } else if (linearAnimations && linearAnimations.length > 0) {
-              playbackName = linearAnimations[0];
-              isStateMachine = false;
-            }
-
-            resizeCanvas();
-            statusEl.textContent = "ready";
-            playBtn.disabled = false;
-          },
-          onLoadError: (err) => {
-            statusEl.textContent = "error";
-            statusEl.style.color = "#ff5b6b";
-            playBtn.disabled = true;
-            const errDiv = document.createElement("div");
-            errDiv.className = "load-error";
-            errDiv.textContent = "Failed to load file .riv";
-            card.appendChild(errDiv);
-            console.error(`Failed to load ${anim.file}`, err);
-          },
-        });
-
-        instances[anim.key] = riveInstance;
-        playBtn.disabled = true; // enabled once loaded
-
-        // Resize berbasis ukuran nyata elemen canvas, dipanggil lewat
-        // ResizeObserver (bukan cuma window "resize") supaya tetap akurat
-        // walau card baru masuk viewport saat discroll, berubah ukuran
-        // akibat reflow grid, dll.
         function resizeCanvas() {
           if (!isLoaded) return;
           const rect = canvas.getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0) return; // belum terlayout, skip
+          if (rect.width === 0 || rect.height === 0) return;
           riveInstance.resizeDrawingSurfaceToCanvas();
         }
 
-        const resizeObserver = new ResizeObserver(() => {
-          resizeCanvas();
-        });
+        // Membuat (atau membuat ulang) Rive instance dari nol.
+        // Dipanggil saat pertama load dan saat Stop — sehingga setiap sesi
+        // Play selalu mendapat autoBind yang segar dan SM + ViewModel
+        // terhubung dengan benar sejak awal.
+        function initRive() {
+          if (riveInstance) {
+            try {
+              riveInstance.cleanup();
+            } catch (_) {}
+          }
+          isLoaded = false;
+          playBtn.disabled = true;
+          stopBtn.disabled = true;
+          setTriggerButtonsEnabled(false);
+          statusEl.classList.remove("playing");
+          statusEl.style.color = "";
+          statusEl.textContent = "loading…";
+
+          riveInstance = new rive.Rive({
+            src: anim.file,
+            canvas: canvas,
+            autoplay: false,
+            autoBind: true,
+            stateMachines: "State Machine 1",
+            useOffscreenRenderer: true,
+            onStateChange: (event) => {
+              const states = event.data;
+              console.log(`[${anim.key}] state berubah ->`, states);
+              if (states?.length)
+                statusEl.textContent = states[states.length - 1];
+            },
+            onLoad: () => {
+              isLoaded = true;
+
+              const smNames = riveInstance.stateMachineNames;
+              const animNames = riveInstance.animationNames;
+              if (smNames?.length > 0) {
+                playbackName = smNames[0];
+                isStateMachine = true;
+              } else if (animNames?.length > 0) {
+                playbackName = animNames[0];
+                isStateMachine = false;
+              }
+
+              const smInputs =
+                isStateMachine && playbackName
+                  ? riveInstance.stateMachineInputs(playbackName)
+                  : null;
+              console.log(`[${anim.key}] onLoad:`, {
+                playbackName,
+                smInputs: smInputs?.map((i) => `${i.name}(type:${i.type})`),
+                viewModelBound: !!riveInstance.viewModelInstance,
+                vmProperties: riveInstance.viewModelInstance?.properties,
+              });
+
+              const vmBound = !!riveInstance.viewModelInstance;
+              resizeCanvas();
+              statusEl.textContent = vmBound ? "ready" : "no viewmodel";
+              if (!vmBound) statusEl.style.color = "#ff5b6b";
+              playBtn.disabled = false;
+              stopBtn.disabled = true;
+              setTriggerButtonsEnabled(false);
+            },
+            onLoadError: (err) => {
+              statusEl.textContent = "error";
+              statusEl.style.color = "#ff5b6b";
+              console.error(`Failed to load ${anim.file}`, err);
+            },
+          });
+
+          instances[anim.key] = riveInstance;
+        }
+
+        initRive();
+
+        const resizeObserver = new ResizeObserver(() => resizeCanvas());
         resizeObserver.observe(canvas);
 
         function doPlay() {
-          if (!isLoaded || isTransitioning) return;
-          if (playBtn.disabled) return; // sudah playing
-          if (playbackName) {
-            riveInstance.play(playbackName);
-          } else {
-            riveInstance.play();
-          }
+          if (!isLoaded) return;
+          if (playBtn.disabled) return;
+
+          if (playbackName) riveInstance.play(playbackName);
+          else riveInstance.play();
+
           statusEl.textContent = "playing";
           statusEl.classList.add("playing");
           playBtn.disabled = true;
           stopBtn.disabled = false;
+          setTriggerButtonsEnabled(true);
         }
 
         function doStop() {
-          if (!isLoaded || isTransitioning) return;
-          if (stopBtn.disabled) return; // sedang tidak playing
-
-          isTransitioning = true;
-
-          if (playbackName) {
-            riveInstance.stop(playbackName);
-            // Reset artboard ke frame/state awal, tapi jangan langsung
-            // autoplay -- biarkan diam di frame pertama.
-            riveInstance.reset({
-              artboard: riveInstance.activeArtboard,
-              [isStateMachine ? "stateMachines" : "animations"]: playbackName,
-              autoplay: false,
-            });
-            resizeCanvas();
-          } else {
-            riveInstance.stop();
-          }
-
-          statusEl.textContent = "stopped";
-          statusEl.classList.remove("playing");
-          playBtn.disabled = false;
-          stopBtn.disabled = true;
-          isTransitioning = false;
+          if (stopBtn.disabled) return;
+          // Re-init dari nol: autoBind + SM terhubung ulang secara bersih,
+          // tanpa risiko ViewModel instance yang stale.
+          initRive();
         }
 
-        // Trigger lewat klik tombol
+        function fireTrigger(triggerName) {
+          if (!isLoaded) return;
+
+          // Metode 1: SM inputs standar
+          if (isStateMachine && playbackName) {
+            const inputs = riveInstance.stateMachineInputs(playbackName);
+            if (inputs?.length > 0) {
+              const input = inputs.find((i) => i.name === triggerName);
+              if (input) {
+                input.fire();
+                console.log(`[${anim.key}] SM input fired: ${triggerName}`);
+                return;
+              }
+              console.log(
+                `[${anim.key}] SM inputs [${inputs.map((i) => i.name).join(", ")}] tidak ada "${triggerName}", coba ViewModel...`,
+              );
+            }
+          }
+
+          // Metode 2: ViewModel data binding (via autoBind)
+          const vmi = riveInstance.viewModelInstance;
+          if (!vmi) {
+            console.warn(`[${anim.key}] viewModelInstance null`);
+            statusEl.textContent = "no viewmodel";
+            return;
+          }
+          const trigger = vmi.trigger(triggerName);
+          if (!trigger) {
+            console.warn(
+              `[${anim.key}] trigger "${triggerName}" tidak ada. VM properties: ${JSON.stringify(vmi.properties)}`,
+            );
+            return;
+          }
+          trigger.trigger();
+          console.log(`[${anim.key}] ViewModel trigger fired: ${triggerName}`);
+        }
+
+        // Trigger lewat klik tombol play/stop
         playBtn.addEventListener("click", doPlay);
         stopBtn.addEventListener("click", doStop);
 
-        // Trigger lewat hover di area canvas: mouse masuk -> play, mouse keluar -> stop
-        canvasWrap.addEventListener("mouseenter", doPlay);
-        canvasWrap.addEventListener("mouseleave", doStop);
+        // Trigger lewat klik tombol idle/bored/success
+        triggerNames.forEach((name, i) => {
+          const btn = triggerButtons[i];
+          if (btn) {
+            btn.addEventListener("click", () => fireTrigger(name));
+          }
+        });
 
         // Saat canvas keluar dari viewport (karena discroll jauh), hentikan
         // render loop instance ini untuk menghemat resource. Saat masuk
-        // viewport lagi, resize ulang supaya gambar pasti tampil dengan benar
-        // -- ini mengatasi kasus canvas tampak blank setelah discroll lewat.
+        // viewport lagi, resize ulang supaya gambar pasti tampil dengan benar.
         const visibilityObserver = new IntersectionObserver(
           (entries) => {
             entries.forEach((entry) => {
@@ -341,7 +406,7 @@
           },
           { threshold: 0.01 },
         );
-        visibilityObserver.observe(canvasWrap);
+        visibilityObserver.observe(card.querySelector(".canvas-wrap"));
       });
     </script>
   </body>
