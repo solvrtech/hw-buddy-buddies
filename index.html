@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Buddy Characters Viewer</title>
+    <title>HomeworkBuddy Characters Viewer</title>
     <script src="https://unpkg.com/@rive-app/canvas@2.38.2"></script>
     <style>
       :root {
@@ -173,10 +173,11 @@
     </style>
   </head>
   <body>
-    <h1>Animated Buddy Characters of HomeworkBuddy</h1>
+    <h1>Animated Buddy Characters</h1>
     <p class="subtitle">
       Press the Play button to start the intro animation, and click on the
-      trigger buttons to switch between states (when the "idle" state is ready).
+      trigger buttons to switch between states (available when the "idle" state
+      is ready).
     </p>
 
     <div class="grid" id="grid"></div>
@@ -185,7 +186,7 @@
       const animations = [{ key: "owl", label: "Owl", file: "owl.riv" }];
 
       // Nama-nama trigger pada ViewModel1 di file owl.riv
-      const triggerNames = ["idle", "bored", "success"];
+      const triggerNames = ["idle", "bored", "success", "failed"];
 
       const grid = document.getElementById("grid");
       const instances = {};
@@ -381,7 +382,7 @@
         playBtn.addEventListener("click", doPlay);
         stopBtn.addEventListener("click", doStop);
 
-        // Trigger lewat klik tombol idle/bored/success
+        // Trigger lewat klik tombol idle/bored/success/failed
         triggerNames.forEach((name, i) => {
           const btn = triggerButtons[i];
           if (btn) {
